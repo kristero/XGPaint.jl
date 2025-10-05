@@ -3,6 +3,9 @@ These profiles include a sigmoid suppression factor that smoothly transitions
 from 0.99 at 4 R_200 to 0.01 at 6 R_200.
 """
 
+# can be used with either angular (default) or physical units
+#abstract type AbstractBattagliaTauProfile{T} <: AbstractGNFW{T} end
+
 # -------------------------------------------------------------------------
 # Sigmoid-suppressed tau models
 # -------------------------------------------------------------------------
@@ -31,6 +34,21 @@ function SigmoidBattagliaTauProfilePhysical(; Omega_c::T=0.2589, Omega_b::T=0.04
     return SigmoidBattagliaTauProfilePhysical{T, typeof(cosmo)}(f_b, cosmo)
 end
 
+# if angular, return the R200 size in radians
+function object_size(model::SigmoidBattagliaTauProfile{T,C}, physical_size, z) where {T,C}
+    d_A = angular_diameter_dist(model.cosmo, z)
+    phys_siz_unitless = T(ustrip(uconvert(unit(d_A), physical_size)))
+    d_A_unitless = T(ustrip(d_A))
+    return atan(phys_siz_unitless, d_A_unitless)
+end
+
+# if physical, return the R200 size in Mpc
+function object_size(::SigmoidBattagliaTauProfilePhysical{T,C}, physical_size, z) where {T,C}
+    return physical_size
+end
+
+
+
 # -------------------------------------------------------------------------
 # Sigmoid definition
 # -------------------------------------------------------------------------
@@ -52,7 +70,7 @@ This gives us:
 - And r0 = 4 + ln(99)/k = 4 + ln(99)/4.599 ≈ 5
 """
 function sigmoid_suppression(r::T) where {T <: Real}
-    k  = T(2.3)   # moderate steepness, same as before
+    k  = T(2.3)
     r0 = T(5.0)
     return 1 / (1 + exp(k * (r - r0)))
 end
@@ -90,7 +108,7 @@ function rho_2d(model::SigmoidBattagliaTauProfilePhysical, r, m200c, z)
     result  = par.P₀ * _sigmoid_nfw_profile_los_quadrature(X, par.xc, par.α, par.β, par.γ)
     return result * rho_crit * (r200c * (1 + z))
 end
-
+"""
 function ne2d(model::SigmoidBattagliaTauProfile, r, m200c, z)
     me  = constants.ElectronMass
     mH  = constants.ProtonMass
@@ -114,10 +132,11 @@ function ne2d(model::SigmoidBattagliaTauProfilePhysical, r, m200c, z)
     result = rho_2d(model, r, m200c, z)
     return result / factor
 end
-
+"""
 # -------------------------------------------------------------------------
 # Compute τ (optical depth)
 # -------------------------------------------------------------------------
+"""
 function compute_tau(model::SigmoidBattagliaTauProfile, r, m200c, z)
     return constants.ThomsonCrossSection * ne2d(model, r, m200c, z) + 0
 end
@@ -125,12 +144,12 @@ end
 function compute_tau(model::SigmoidBattagliaTauProfilePhysical, r, m200c, z)
     return constants.ThomsonCrossSection * ne2d(model, r, m200c, z) + 0
 end
-
+"""
 # -------------------------------------------------------------------------
 # Direct call overloads
 # -------------------------------------------------------------------------
-(model::SigmoidBattagliaTauProfile)(r, m200c, z) =
-    compute_tau(model, r, m200c * M_sun, z)
+#(model::SigmoidBattagliaTauProfile)(r, m200c, z) =
+#    compute_tau(model, r, m200c * M_sun, z)
 
-(model::SigmoidBattagliaTauProfilePhysical)(r, m200c, z) =
-    compute_tau(model, r, m200c * M_sun, z)
+#(model::SigmoidBattagliaTauProfilePhysical)(r, m200c, z) =
+#    compute_tau(model, r, m200c * M_sun, z)
