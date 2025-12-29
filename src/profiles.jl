@@ -245,7 +245,19 @@ function build_interpolator(model::AbstractProfile; cache_file::String="",
         prof_logθs, prof_redshift, prof_logMs, prof_y = model_grid["prof_logθs"], 
             model_grid["prof_redshift"], model_grid["prof_logMs"], model_grid["prof_y"]
     end
-
+    
+    # --- avoid log(0) / negative ---
+    mask_bad = prof_y .<= 0
+    if any(mask_bad)
+        # using the smallest available value in the array
+        pos_vals = prof_y[.!mask_bad]
+        min_pos  = minimum(pos_vals)
+        floor_val = min_pos * 1e-6          # adjusting if it is large
+        prof_y[mask_bad] .= floor_val
+        verbose && println("Replaced ", count(mask_bad),
+                           " ≤0 entries in prof_y with floor = ", floor_val)
+    end
+    # --------------------------------
     itp = Interpolations.interpolate(log.(prof_y), BSpline(Cubic(Line(OnGrid()))))
     interp_model = scale(itp, prof_logθs, prof_redshift, prof_logMs)
     return LogInterpolatorProfile(model, interp_model)
