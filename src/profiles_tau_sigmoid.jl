@@ -78,7 +78,7 @@ end
 # -------------------------------------------------------------------------
 # Suppressed line-of-sight integration
 # -------------------------------------------------------------------------
-function _sigmoid_nfw_profile_los_quadrature(x, xc, α, β, γ; zmax=1e5, rtol=eps(), order=9)
+function _sigmoid_nfw_profile_los_quadrature(x, xc, α, β, γ; zmax=5e4, rtol=1e-5, order=7)
     x² = x^2
     scale = 1e9
     integral, err = quadgk(
