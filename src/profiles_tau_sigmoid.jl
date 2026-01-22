@@ -71,14 +71,14 @@ This gives us:
 """
 function sigmoid_suppression(r::T) where {T <: Real}
     k  = T(2.3)
-    r0 = T(5.0)
+    r0 = T(3.0)
     return 1 / (1 + exp(k * (r - r0)))
 end
 
 # -------------------------------------------------------------------------
 # Suppressed line-of-sight integration
 # -------------------------------------------------------------------------
-function _sigmoid_nfw_profile_los_quadrature(x, xc, α, β, γ; zmax=5e4, rtol=1e-5, order=7)
+function _sigmoid_nfw_profile_los_quadrature(x, xc, α, β, γ; zmax=1e5, rtol=1e-10, order=9)
     x² = x^2
     scale = 1e9
     integral, err = quadgk(

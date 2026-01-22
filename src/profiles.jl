@@ -226,14 +226,14 @@ Base.show(io::IO, ip::LogInterpolatorProfile{T,P,I1}) where {T,P,I1} = print(
 
 """Helper function to build a (θ, z, Mh) interpolator"""
 function build_interpolator(model::AbstractProfile; cache_file::String="", 
-                            N_logθ=512, pad=256, overwrite=true, verbose=true)
+                            N_logθ=512, pad=256, logM_max = 15.7, overwrite=true, verbose=true)
 
     if overwrite || (isfile(cache_file) == false)
         verbose && print("Building new interpolator from model.\n")
         rft = RadialFourierTransform(n=N_logθ, pad=pad)
         logθ_min, logθ_max = log(minimum(rft.r)), log(maximum(rft.r))
         prof_logθs, prof_redshift, prof_logMs, prof_y = profile_grid(model; 
-            N_logθ=N_logθ, logθ_min=logθ_min, logθ_max=logθ_max)
+            N_logθ=N_logθ, logθ_min=logθ_min, logθ_max=logθ_max, logM_max = logM_max)
         if length(cache_file) > 0
             verbose && print("Saving new interpolator to $(cache_file).\n")
             save(cache_file, Dict("prof_logθs"=>prof_logθs, 
