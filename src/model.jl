@@ -6,6 +6,23 @@ All foreground models inherit from this type.
 abstract type AbstractForegroundModel end
 
 """
+    PowerLawParam(amp, alpha_m, alpha_z)
+
+Container for a redshift- and mass-dependent parameter of the form:
+
+```
+amp * m^alpha_m * (1 + z)^alpha_z
+```
+"""
+struct PowerLawParam{T}
+    amp::T
+    alpha_m::T
+    alpha_z::T
+end
+
+@inline powerlaw_value(p::PowerLawParam{T}, m, z1) where {T} = p.amp * m^p.alpha_m * z1^p.alpha_z
+
+"""
     get_cosmology(::Type{T}; h=0.69, Neff=3.04, OmegaK=0.0,
         OmegaM=0.29, OmegaR=nothing, Tcmb=2.7255, w0=-1, wa=0)
 

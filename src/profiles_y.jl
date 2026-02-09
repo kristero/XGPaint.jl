@@ -5,28 +5,59 @@ break model variant."""
 struct Battaglia16ThermalSZProfile{T,C} <: AbstractGNFW{T}
     f_b::T  # Omega_b / Omega_c = 0.0486 / 0.2589
     cosmo::C
+    P0::PowerLawParam{T}
+    x_c::PowerLawParam{T}
+    alpha::PowerLawParam{T}
+    beta::PowerLawParam{T}
+    gamma::PowerLawParam{T}
 end
 
 struct BreakModel{T,C} <: AbstractGNFW{T}
     f_b::T
     cosmo::C
+    P0::PowerLawParam{T}
+    x_c::PowerLawParam{T}
+    alpha::PowerLawParam{T}
+    beta::PowerLawParam{T}
+    gamma::PowerLawParam{T}
     alpha_break::T
     M_break::T
 end
 
-function Battaglia16ThermalSZProfile(; Omega_c::T=0.2589, Omega_b::T=0.0486, h::T=0.6774) where {T <: Real}
+function Battaglia16ThermalSZProfile(; Omega_c::T=0.2589, Omega_b::T=0.0486, h::T=0.6774,
+        P0_amp::T=18.1, P0_alpha_m::T=0.154, P0_alpha_z::T=-0.758,
+        x_c_amp::T=0.497, x_c_alpha_m::T=-0.00865, x_c_alpha_z::T=0.731,
+        alpha_amp::T=1.0, alpha_alpha_m::T=0.0, alpha_alpha_z::T=0.0,
+        beta_amp::T=4.35, beta_alpha_m::T=0.0393, beta_alpha_z::T=0.415,
+        gamma_amp::T=-0.3, gamma_alpha_m::T=0.0, gamma_alpha_z::T=0.0) where {T <: Real}
     OmegaM=Omega_b+Omega_c
     f_b = Omega_b / OmegaM
     cosmo = get_cosmology(T, h=h, OmegaM=OmegaM)
-    return Battaglia16ThermalSZProfile(f_b, cosmo)
+    P0 = PowerLawParam(T(P0_amp), T(P0_alpha_m), T(P0_alpha_z))
+    x_c = PowerLawParam(T(x_c_amp), T(x_c_alpha_m), T(x_c_alpha_z))
+    alpha = PowerLawParam(T(alpha_amp), T(alpha_alpha_m), T(alpha_alpha_z))
+    beta = PowerLawParam(T(beta_amp), T(beta_alpha_m), T(beta_alpha_z))
+    gamma = PowerLawParam(T(gamma_amp), T(gamma_alpha_m), T(gamma_alpha_z))
+    return Battaglia16ThermalSZProfile(f_b, cosmo, P0, x_c, alpha, beta, gamma)
 end
 
-function BreakModel(; Omega_c::T=0.2589, Omega_b::T=0.0486, h::T=0.6774, alpha_break::T=1.5, M_break::T=2.0*10^14) where {T <: Real}
+function BreakModel(; Omega_c::T=0.2589, Omega_b::T=0.0486, h::T=0.6774,
+        alpha_break::T=1.5, M_break::T=2.0*10^14,
+        P0_amp::T=18.1, P0_alpha_m::T=0.154, P0_alpha_z::T=-0.758,
+        x_c_amp::T=0.497, x_c_alpha_m::T=-0.00865, x_c_alpha_z::T=0.731,
+        alpha_amp::T=1.0, alpha_alpha_m::T=0.0, alpha_alpha_z::T=0.0,
+        beta_amp::T=4.35, beta_alpha_m::T=0.0393, beta_alpha_z::T=0.415,
+        gamma_amp::T=-0.3, gamma_alpha_m::T=0.0, gamma_alpha_z::T=0.0) where {T <: Real}
     #alpha_break = 1.486 from Shivam P paper by Nate's sleuthing
     OmegaM=Omega_b+Omega_c
     f_b = Omega_b / OmegaM
     cosmo = get_cosmology(T, h=h, OmegaM=OmegaM)
-    return BreakModel(f_b, cosmo, alpha_break, M_break)
+    P0 = PowerLawParam(T(P0_amp), T(P0_alpha_m), T(P0_alpha_z))
+    x_c = PowerLawParam(T(x_c_amp), T(x_c_alpha_m), T(x_c_alpha_z))
+    alpha = PowerLawParam(T(alpha_amp), T(alpha_alpha_m), T(alpha_alpha_z))
+    beta = PowerLawParam(T(beta_amp), T(beta_alpha_m), T(beta_alpha_z))
+    gamma = PowerLawParam(T(gamma_amp), T(gamma_alpha_m), T(gamma_alpha_z))
+    return BreakModel(f_b, cosmo, P0, x_c, alpha, beta, gamma, alpha_break, M_break)
 end
 
 function generalized_nfw(x, xc, α, β, γ)
@@ -39,15 +70,27 @@ function _generalized_scaled_nfw(x̄, α, β, γ)
 end
 
 
-function get_params(::AbstractGNFW{T}, M_200, z) where T
+function get_params(model::Battaglia16ThermalSZProfile{T}, M_200, z) where T
 	z₁ = z + 1
 	m = M_200 / (1e14M_sun)
-	P₀ = 18.1 * m^0.154 * z₁^-0.758
-	xc = 0.497 * m^-0.00865 * z₁^0.731
-	β = 4.35 * m^0.0393 * z₁^0.415
-	α = 1
-    γ = -0.3
-    β = γ - α * β  # Sigurd's conversion from Battaglia to standard NFW
+	P₀ = powerlaw_value(model.P0, m, z₁)
+	xc = powerlaw_value(model.x_c, m, z₁)
+	α = powerlaw_value(model.alpha, m, z₁)
+	β_raw = powerlaw_value(model.beta, m, z₁)
+    γ = powerlaw_value(model.gamma, m, z₁)
+    β = γ - α * β_raw  # Sigurd's conversion from Battaglia to standard NFW
+    return (xc=T(xc), α=T(α), β=T(β), γ=T(γ), P₀=T(P₀))
+end
+
+function get_params(model::BreakModel{T}, M_200, z) where T
+    z₁ = z + 1
+    m = M_200 / (1e14M_sun)
+    P₀ = powerlaw_value(model.P0, m, z₁)
+    xc = powerlaw_value(model.x_c, m, z₁)
+    α = powerlaw_value(model.alpha, m, z₁)
+    β_raw = powerlaw_value(model.beta, m, z₁)
+    γ = powerlaw_value(model.gamma, m, z₁)
+    β = γ - α * β_raw  # Sigurd's conversion from Battaglia to standard NFW
     return (xc=T(xc), α=T(α), β=T(β), γ=T(γ), P₀=T(P₀))
 end
 
