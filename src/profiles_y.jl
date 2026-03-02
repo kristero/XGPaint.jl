@@ -62,11 +62,11 @@ end
 
 function generalized_nfw(x, xc, α, β, γ)
     x̄ = x / xc
-    return x̄^γ * (1 + x̄^α)^((β - γ) / α)
+    return x̄^γ * (1 + x̄^α)^(-(β + γ) / α)    # correction to battaglia 2016 tau.
 end
 
 function _generalized_scaled_nfw(x̄, α, β, γ)
-    return x̄^γ * (1 + x̄^α)^((β - γ) / α)
+    return x̄^γ * (1 + x̄^α)^(-(β + γ) / α)
 end
 
 
@@ -78,7 +78,7 @@ function get_params(model::Battaglia16ThermalSZProfile{T}, M_200, z) where T
 	α = powerlaw_value(model.alpha, m, z₁)
 	β_raw = powerlaw_value(model.beta, m, z₁)
     γ = powerlaw_value(model.gamma, m, z₁)
-    β = γ - α * β_raw  # Sigurd's conversion from Battaglia to standard NFW
+    β = -γ - α * β_raw  # Sigurd's conversion from Battaglia to standard NFW
     return (xc=T(xc), α=T(α), β=T(β), γ=T(γ), P₀=T(P₀))
 end
 
@@ -90,7 +90,7 @@ function get_params(model::BreakModel{T}, M_200, z) where T
     α = powerlaw_value(model.alpha, m, z₁)
     β_raw = powerlaw_value(model.beta, m, z₁)
     γ = powerlaw_value(model.gamma, m, z₁)
-    β = γ - α * β_raw  # Sigurd's conversion from Battaglia to standard NFW
+    β = -γ - α * β_raw  # Sigurd's conversion from Battaglia to standard NFW
     return (xc=T(xc), α=T(α), β=T(β), γ=T(γ), P₀=T(P₀))
 end
 
