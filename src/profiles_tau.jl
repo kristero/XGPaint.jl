@@ -115,7 +115,7 @@ function ne2d(model::AbstractBattagliaTauProfile, r, m200c, z)
     nHe_ne = (1 - xH)/(2 * (1 + xH))
     factor = (me + nH_ne*mH + nHe_ne*mHe) / model.cosmo.h^2
     result = rho_2d(model, r, m200c, z)  # (Msun/h) / (Mpc/h)^2
-    return result / factor
+    return result * model.f_b / factor
 end
 
 # r is either a physical or angular radius. unitful does not do little h, so physical radius 
