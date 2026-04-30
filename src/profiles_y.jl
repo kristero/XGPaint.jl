@@ -78,7 +78,10 @@ function get_params(model::Battaglia16ThermalSZProfile{T}, M_200, z) where T
 	α = powerlaw_value(model.alpha, m, z₁)
 	β_raw = powerlaw_value(model.beta, m, z₁)
     γ = powerlaw_value(model.gamma, m, z₁)
-    β = -γ - α * β_raw  # Sigurd's conversion from Battaglia to standard NFW
+    # Battaglia parameterizes the outer factor as (1 + x^α)^(-β_raw), while
+    # generalized_nfw expects the asymptotic outer slope directly. Matching the
+    # large-radius behavior x^(γ - αβ_raw) = x^(-β) gives β = αβ_raw - γ.
+    β = α * β_raw - γ
     return (xc=T(xc), α=T(α), β=T(β), γ=T(γ), P₀=T(P₀))
 end
 
@@ -90,7 +93,7 @@ function get_params(model::BreakModel{T}, M_200, z) where T
     α = powerlaw_value(model.alpha, m, z₁)
     β_raw = powerlaw_value(model.beta, m, z₁)
     γ = powerlaw_value(model.gamma, m, z₁)
-    β = -γ - α * β_raw  # Sigurd's conversion from Battaglia to standard NFW
+    β = α * β_raw - γ
     return (xc=T(xc), α=T(α), β=T(β), γ=T(γ), P₀=T(P₀))
 end
 
@@ -139,6 +142,82 @@ function compton_y(model::Battaglia16ThermalSZProfile, r, M_200c, z)
 end
 function compton_y(model::BreakModel, r, M_200c, z)
     return P_e_los(model, r, M_200c, z) * P_e_factor + 0   # +0 to strip units
+end
+
+function prepare_profile_slice(model::Battaglia16ThermalSZProfile{T}, mass, redshift) where T
+    mass_with_units = mass * M_sun
+    par = get_params(model, mass_with_units, redshift)
+    alpha = getproperty(par, Symbol("\u03b1"))
+    beta = getproperty(par, Symbol("\u03b2"))
+    gamma = getproperty(par, Symbol("\u03b3"))
+    p0 = getproperty(par, Symbol("P\u2080"))
+    r200 = var"R_Δ"(model, mass_with_units, redshift, 200)
+    theta_scale = T(angular_size(model, r200, redshift))
+    amplitude = T(
+        (
+            0.5176 *
+            constants.G *
+            mass_with_units *
+            200 *
+            var"ρ_crit"(model, redshift) *
+            model.f_b /
+            2 *
+            P_e_factor *
+            p0
+        ) + 0
+    )
+    return (; theta_scale, xc=par.xc, alpha, beta, gamma, amplitude)
+end
+
+@inline function evaluate_profile_slice(::Battaglia16ThermalSZProfile, prepared, theta, mass, redshift)
+    x = theta / prepared.theta_scale
+    return prepared.amplitude * _nfw_profile_los_quadrature(
+        x,
+        prepared.xc,
+        prepared.alpha,
+        prepared.beta,
+        prepared.gamma,
+    )
+end
+
+function prepare_profile_slice(model::BreakModel{T}, mass, redshift) where T
+    mass_with_units = mass * M_sun
+    par = get_params(model, mass_with_units, redshift)
+    alpha = getproperty(par, Symbol("\u03b1"))
+    beta = getproperty(par, Symbol("\u03b2"))
+    gamma = getproperty(par, Symbol("\u03b3"))
+    p0 = getproperty(par, Symbol("P\u2080"))
+    r200 = var"R_Δ"(model, mass_with_units, redshift, 200)
+    theta_scale = T(angular_size(model, r200, redshift))
+    break_factor = mass_with_units < model.M_break * M_sun ?
+        (mass_with_units / (model.M_break * M_sun))^model.alpha_break :
+        one(T)
+    amplitude = T(
+        (
+            0.5176 *
+            constants.G *
+            mass_with_units *
+            200 *
+            var"ρ_crit"(model, redshift) *
+            model.f_b /
+            2 *
+            P_e_factor *
+            p0 *
+            break_factor
+        ) + 0
+    )
+    return (; theta_scale, xc=par.xc, alpha, beta, gamma, amplitude)
+end
+
+@inline function evaluate_profile_slice(::BreakModel, prepared, theta, mass, redshift)
+    x = theta / prepared.theta_scale
+    return prepared.amplitude * _nfw_profile_los_quadrature(
+        x,
+        prepared.xc,
+        prepared.alpha,
+        prepared.beta,
+        prepared.gamma,
+    )
 end
 
 

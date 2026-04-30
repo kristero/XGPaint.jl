@@ -91,6 +91,15 @@ function R_Δ(model, M_Δ, z, Δ=200)
     return ∛(M_Δ / (4π/3 * Δ * ρ_crit(model, z)))
 end
 
+"""
+    r200c_comoving(model, M_200c, z)
+
+Return the halo `R200c` radius in comoving units.
+"""
+function r200c_comoving(model, M_200c, z)
+    return R_Δ(model, M_200c, z, 200) * (one(z) + z)
+end
+
 function angular_size(model::AbstractProfile{T}, physical_size, z) where T
     d_A = angular_diameter_dist(model.cosmo, z)
 
