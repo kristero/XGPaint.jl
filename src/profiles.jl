@@ -67,8 +67,8 @@ function fill_profile_slice!(dest, model::AbstractGNFW{T}, logthetas, mass, reds
 end
 
 
-function profile_grid(model::AbstractGNFW{T}; N_z=256, N_logM=256, N_logtheta=512, z_min=1e-3,
-        z_max=5.0, logM_min=11, logM_max=15.7, logtheta_min=-15.7, logtheta_max=2.5) where T
+function profile_grid(model::AbstractGNFW{T}; N_z=256, N_logM=128, N_logtheta=256, z_min=1e-3,
+        z_max=5.0, logM_min=12, logM_max=15.7, logtheta_min=-15.7, logtheta_max=2.5) where T
 
     logthetas = LinRange(logtheta_min, logtheta_max, N_logtheta)
     redshifts = LinRange(z_min, z_max, N_z)
@@ -147,13 +147,16 @@ end
 
 
 """Apply a beam to a profile grid"""
+_thread_storage_count() = isdefined(Threads, :maxthreadid) ? Threads.maxthreadid() : Threads.nthreads()
+
 function transform_profile_grid!(y_prof_grid, rft, lbeam)
     N_z = size(y_prof_grid, 2)
     N_logM = size(y_prof_grid, 3)
     N_profiles = N_z * N_logM
-    rfts = [deepcopy(rft) for _ in 1:Threads.nthreads()]
+    nthreads = Threads.nthreads()
+    rfts = [deepcopy(rft) for _ in 1:_thread_storage_count()]
 
-    Threads.@threads for chunk in chunks(1:N_profiles; n=Threads.nthreads())
+    Threads.@threads for chunk in chunks(1:N_profiles; n=nthreads)
         local_rft = rfts[Threads.threadid()]
         for idx in chunk
             i = 1 + ((idx - 1) % N_z)
@@ -220,9 +223,10 @@ function replace_nonpositive_with_floor!(y_prof_grid)
     T = eltype(y_prof_grid)
     N_values = length(y_prof_grid)
     nthreads = Threads.nthreads()
-    local_mins = fill(typemax(T), nthreads)
-    local_positive_counts = zeros(Int, nthreads)
-    local_bad_counts = zeros(Int, nthreads)
+    nthread_slots = _thread_storage_count()
+    local_mins = fill(typemax(T), nthread_slots)
+    local_positive_counts = zeros(Int, nthread_slots)
+    local_bad_counts = zeros(Int, nthread_slots)
 
     Threads.@threads for chunk in chunks(1:N_values; n=nthreads)
         tid = Threads.threadid()
@@ -366,7 +370,7 @@ end
 
 """Helper function to build a (theta, z, Mh) interpolator"""
 function build_interpolator(model::AbstractProfile; cache_file::String="",
-                            N_logtheta=512, pad=256, logM_max=15.7, overwrite=true, verbose=true)
+                            N_logtheta=512, pad=128, logM_max=15.7, overwrite=true, verbose=true)
 
     cleanup_nonpositive = cleanup_nonpositive_enabled()
     if verbose
@@ -425,7 +429,8 @@ function build_interpolator(model::AbstractProfile; cache_file::String="",
 
         unpack_t0 = interpolator_stage_start("cache unpack"; verbose=verbose)
         logtheta_key = haskey(model_grid, "prof_logthetas") ? "prof_logthetas" :
-            (haskey(model_grid, "prof_log?s") ? "prof_log?s" : "prof_log?s")
+            (haskey(model_grid, "prof_logθs") ? "prof_logθs" :
+             error("Cache is missing log-theta key. Found keys: $(collect(keys(model_grid)))"))
         prof_logthetas, prof_redshift, prof_logMs, prof_y = model_grid[logtheta_key],
             model_grid["prof_redshift"], model_grid["prof_logMs"], model_grid["prof_y"]
         interpolator_stage_end(
