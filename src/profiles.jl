@@ -35,36 +35,81 @@ end
 
 Base.show(io::IO, w::AbstractProfileWorkspace) = print(io, "$(typeof(w))")
 
-
-function profile_grid(model::AbstractGNFW{T}; N_z=256, N_logM=128, N_logθ=256, z_min=1e-3, 
-        z_max=5.0, logM_min=12, logM_max=15.7, logθ_min=-15.7, logθ_max=2.5) where T
-
-    logθs = LinRange(logθ_min, logθ_max, N_logθ)
-    redshifts = LinRange(z_min, z_max, N_z)
-    logMs = LinRange(logM_min, logM_max, N_logM)
-    return profile_grid(model, logθs, redshifts, logMs)
+@inline function interpolator_stage_start(label::AbstractString; verbose::Bool=true)
+    if verbose
+        println("[interpolator] START ", label)
+        flush(stdout)
+    end
+    return time_ns()
 end
 
-function profile_grid(model::AbstractGNFW{T}, logθs, redshifts, logMs) where T
+@inline function interpolator_stage_end(label::AbstractString, t0_ns; verbose::Bool=true, extra::AbstractString="")
+    if verbose
+        elapsed_s = (time_ns() - t0_ns) / 1.0e9
+        suffix = isempty(extra) ? "" : " " * extra
+        println("[interpolator] END   ", label, " wall=", round(elapsed_s; digits=3), " s", suffix)
+        flush(stdout)
+    end
+    return nothing
+end
 
-    N_logθ, N_z, N_logM = length(logθs), length(redshifts), length(logMs)
-    A = zeros(T, (N_logθ, N_z, N_logM))
+@inline prepare_profile_slice(model, mass, redshift) = nothing
 
-    # Use ChunkSplitters for better load balancing
-    Threads.@threads for chunk in chunks(1:N_logM; n=Threads.nthreads())
-        for im in chunk
-            logM = logMs[im]
-            M = 10^(logM)
-            for (iz, z) in enumerate(redshifts)
-                for iθ in 1:N_logθ
-                    θ = exp(logθs[iθ])
-                    A[iθ, iz, im] = max(zero(T), model(θ, M, z))
-                end
-            end
+@inline evaluate_profile_slice(model, prepared, theta, mass, redshift) = model(theta, mass, redshift)
+
+function fill_profile_slice!(dest, model::AbstractGNFW{T}, logthetas, mass, redshift) where T
+    prepared = prepare_profile_slice(model, mass, redshift)
+    @inbounds for itheta in eachindex(logthetas)
+        theta = exp(logthetas[itheta])
+        dest[itheta] = max(zero(T), evaluate_profile_slice(model, prepared, theta, mass, redshift))
+    end
+    return nothing
+end
+
+
+function profile_grid(model::AbstractGNFW{T}; N_z=256, N_logM=128, N_logtheta=256, z_min=1e-3,
+        z_max=5.0, logM_min=12, logM_max=15.7, logtheta_min=-15.7, logtheta_max=2.5) where T
+
+    logthetas = LinRange(logtheta_min, logtheta_max, N_logtheta)
+    redshifts = LinRange(z_min, z_max, N_z)
+    logMs = LinRange(logM_min, logM_max, N_logM)
+    return profile_grid(model, logthetas, redshifts, logMs)
+end
+
+function profile_grid(model::AbstractGNFW{T}, logthetas, redshifts, logMs) where T
+
+    N_logtheta, N_z, N_logM=length(logθs), length(redshifts), length(logMs)
+    println(
+        "[interpolator] profile_grid dims: N_logtheta=", N_logtheta,
+        " N_z=", N_z,
+        " N_logM=length(logMs, N_logM,
+        " threads=", Threads.nthreads()
+    )
+    flush(stdout)
+
+    alloc_t0 = interpolator_stage_start("profile_grid allocation")
+    A = zeros(T, (N_logtheta, N_z, N_logM))
+    interpolator_stage_end(
+        "profile_grid allocation",
+        alloc_t0;
+        extra="size=$(size(A)) eltype=$(T)"
+    )
+
+    eval_t0 = interpolator_stage_start("profile_grid threaded evaluation")
+    N_profiles = N_z * N_logM
+    nchunks = min(N_profiles, max(Threads.nthreads(), 8 * Threads.nthreads()))
+    Threads.@threads for chunk in chunks(1:N_profiles; n=nchunks)
+        for idx in chunk
+            iz = 1 + ((idx - 1) % N_z)
+            im = 1 + div(idx - 1, N_z)
+            mass = 10^(logMs[im])
+            redshift = redshifts[iz]
+            fill_profile_slice!(view(A, :, iz, im), model, logthetas, mass, redshift)
         end
     end
+    interpolator_stage_end("profile_grid threaded evaluation", eval_t0)
 
-    return logθs, redshifts, logMs, A
+    return logthetas, redshifts, logMs, A
 end
 
 
@@ -102,37 +147,129 @@ end
 
 
 """Apply a beam to a profile grid"""
+_thread_storage_count() = isdefined(Threads, :maxthreadid) ? Threads.maxthreadid() : Threads.nthreads()
+
 function transform_profile_grid!(y_prof_grid, rft, lbeam)
-    rprof = y_prof_grid[:,1,1]
-    for i in axes(y_prof_grid, 2)
-        for j in axes(y_prof_grid, 3)
-            rprof .= y_prof_grid[:,i,j]
-            lprof = real2harm(rft, rprof)
+    N_z = size(y_prof_grid, 2)
+    N_logM = size(y_prof_grid, 3)
+    N_profiles = N_z * N_logM
+    nthreads = Threads.nthreads()
+    rfts = [deepcopy(rft) for _ in 1:_thread_storage_count()]
+
+    Threads.@threads for chunk in chunks(1:N_profiles; n=nthreads)
+        local_rft = rfts[Threads.threadid()]
+        for idx in chunk
+            i = 1 + ((idx - 1) % N_z)
+            j = 1 + div(idx - 1, N_z)
+            rprof = copy(@view y_prof_grid[:, i, j])
+            lprof = real2harm(local_rft, rprof)
             lprof .*= lbeam
             reverse!(lprof)
-            rprof′ = harm2real(rft, lprof)
-            y_prof_grid[:,i,j] .= rprof′
+            y_prof_grid[:, i, j] .= harm2real(local_rft, lprof)
         end
     end
+    return nothing
 end
 
 "prune a profile grid for negative values, extrapolate instead"
 function cleanup_negatives!(y_prof_grid)
-    for i in axes(y_prof_grid, 2)
-        for j in axes(y_prof_grid, 3)
+    floor_value = nextfloat(0.0)
+    N_z = size(y_prof_grid, 2)
+    N_logM = size(y_prof_grid, 3)
+    N_profiles = N_z * N_logM
+
+    Threads.@threads for chunk in chunks(1:N_profiles; n=Threads.nthreads())
+        for idx in chunk
+            i = 1 + ((idx - 1) % N_z)
+            j = 1 + div(idx - 1, N_z)
+            profile = @view y_prof_grid[:, i, j]
+            first_positive_idx = findfirst(>(0), profile)
+
+            if isnothing(first_positive_idx)
+                fill!(profile, floor_value)
+                continue
+            end
+
+            if first_positive_idx > 1
+                profile[1:first_positive_idx-1] .= profile[first_positive_idx]
+            end
+
             extrapolating = false
             fact = 1.0
-            for k in axes(y_prof_grid, 1)
-                if y_prof_grid[k,i,j] <= 0
+            for k in first_positive_idx:length(profile)
+                if profile[k] <= 0
                     extrapolating = true
-                    fact = y_prof_grid[k-1,i,j] / y_prof_grid[k-2,i,j]
+                    if k == 1
+                        profile[k] = max(profile[first_positive_idx], floor_value)
+                        continue
+                    elseif k == 2
+                        fact = 1.0
+                    else
+                        prev_value = max(profile[k - 1], floor_value)
+                        prev_prev_value = max(profile[k - 2], floor_value)
+                        fact = prev_value / prev_prev_value
+                    end
                 end
                 if extrapolating
-                    y_prof_grid[k,i,j] = max(fact * y_prof_grid[k-1,i,j], nextfloat(0.0))
+                    profile[k] = max(fact * profile[k - 1], floor_value)
                 end
             end
         end
     end
+    return nothing
+end
+
+function replace_nonpositive_with_floor!(y_prof_grid)
+    T = eltype(y_prof_grid)
+    N_values = length(y_prof_grid)
+    nthreads = Threads.nthreads()
+    nthread_slots = _thread_storage_count()
+    local_mins = fill(typemax(T), nthread_slots)
+    local_positive_counts = zeros(Int, nthread_slots)
+    local_bad_counts = zeros(Int, nthread_slots)
+
+    Threads.@threads for chunk in chunks(1:N_values; n=nthreads)
+        tid = Threads.threadid()
+        local_min = local_mins[tid]
+        positive_count = 0
+        bad_count = 0
+
+        @inbounds for idx in chunk
+            value = y_prof_grid[idx]
+            if value > zero(T)
+                positive_count += 1
+                if value < local_min
+                    local_min = value
+                end
+            else
+                bad_count += 1
+            end
+        end
+
+        local_mins[tid] = local_min
+        local_positive_counts[tid] += positive_count
+        local_bad_counts[tid] += bad_count
+    end
+
+    replaced_count = sum(local_bad_counts)
+    replaced_count == 0 && return replaced_count, zero(T)
+
+    total_positive_count = sum(local_positive_counts)
+    floor_val = if total_positive_count == 0
+        nextfloat(zero(T))
+    else
+        minimum(local_mins[local_positive_counts .> 0]) * T(1e-6)
+    end
+
+    Threads.@threads for chunk in chunks(1:N_values; n=nthreads)
+        @inbounds for idx in chunk
+            if y_prof_grid[idx] <= zero(T)
+                y_prof_grid[idx] = floor_val
+            end
+        end
+    end
+
+    return replaced_count, floor_val
 end
 
 
@@ -154,7 +291,7 @@ function build_max_paint_logradius(logθs, redshifts, logMs,
     
     logRs = zeros(T, (size(A)[2:3]))
     N_logM = length(logMs)
-    N_logθ = length(logθs)
+    N_logθ=256)
     dF_r = zeros(N_logθ)
     
     for im in 1:N_logM
@@ -224,31 +361,142 @@ Base.show(io::IO, ip::LogInterpolatorProfile{T,P,I1}) where {T,P,I1} = print(
     io, "LogInterpolatorProfile{$(T),\n  $(P),\n  ...} interpolating over size ", size(ip.itp))
 
 
-"""Helper function to build a (θ, z, Mh) interpolator"""
-function build_interpolator(model::AbstractProfile; cache_file::String="", 
-                            N_logθ=256, pad=128, logM_max = 15.7, overwrite=true, verbose=true)
+function cleanup_nonpositive_enabled()
+    raw = lowercase(strip(get(ENV, "XGPAINT_CLEANUP_NONPOSITIVE", "true")))
+    raw in ("1", "true", "t", "yes", "y", "on") && return true
+    raw in ("0", "false", "f", "no", "n", "off") && return false
+    error("Invalid XGPAINT_CLEANUP_NONPOSITIVE=$(repr(raw)).")
+end
 
-    if overwrite || (isfile(cache_file) == false)
-        verbose && print("Building new interpolator from model.\n")
-        rft = RadialFourierTransform(n=N_logθ, pad=pad)
-        logθ_min, logθ_max = log(minimum(rft.r)), log(maximum(rft.r))
-        prof_logθs, prof_redshift, prof_logMs, prof_y = profile_grid(model; 
-            N_logθ=N_logθ, logθ_min=logθ_min, logθ_max=logθ_max, logM_max = logM_max)
-        if length(cache_file) > 0
-            verbose && print("Saving new interpolator to $(cache_file).\n")
-            save(cache_file, Dict("prof_logθs"=>prof_logθs, 
-                "prof_redshift"=>prof_redshift, "prof_logMs"=>prof_logMs, "prof_y"=>prof_y))
-        end
-    else
-        print("Found cached Battaglia profile model. Loading from disk.\n")
-        model_grid = load(cache_file)
-        prof_logθs, prof_redshift, prof_logMs, prof_y = model_grid["prof_logθs"], 
-            model_grid["prof_redshift"], model_grid["prof_logMs"], model_grid["prof_y"]
+"""Helper function to build a (theta, z, Mh) interpolator"""
+function build_interpolator(model::AbstractProfile; cache_file::String="",
+                            N_logtheta=512, pad=128, logM_max=15.7, overwrite=true, verbose=true)
+
+    cleanup_nonpositive = cleanup_nonpositive_enabled()
+    if verbose
+        println(
+            "[interpolator] config overwrite=", overwrite,
+            " cache_file=", isempty(cache_file) ? "<none>" : cache_file,
+            " cleanup_nonpositive=", cleanup_nonpositive,
+            " N_logtheta=", N_logtheta,
+            " pad=pad, pad,
+            " logM_max=logM_max, logM_max,
+            " threads=", Threads.nthreads()
+        )
+        flush(stdout)
     end
 
-    itp = Interpolations.interpolate(log.(prof_y), BSpline(Cubic(Line(OnGrid()))))
-    interp_model = scale(itp, prof_logθs, prof_redshift, prof_logMs)
-    return LogInterpolatorProfile(model, interp_model)
+    if overwrite || (isfile(cache_file) == false)
+        verbose && (print("Building new interpolator from model.
+"); flush(stdout))
+        rft_t0 = interpolator_stage_start("RadialFourierTransform"; verbose=verbose)
+        rft = RadialFourierTransform(n=N_logtheta, pad=pad)
+        interpolator_stage_end("RadialFourierTransform", rft_t0; verbose=verbose)
+
+        range_t0 = interpolator_stage_start("rft radius bounds"; verbose=verbose)
+        logtheta_min, logtheta_max = log(minimum(rft.r)), log(maximum(rft.r))
+        interpolator_stage_end(
+            "rft radius bounds",
+            range_t0;
+            verbose=verbose,
+            extra="logtheta_min=$(logtheta_min) logtheta_max=$(logtheta_max)"
+        )
+
+        grid_t0 = interpolator_stage_start("profile_grid"; verbose=verbose)
+        prof_logthetas, prof_redshift, prof_logMs, prof_y = profile_grid(model;
+            N_logtheta=N_logtheta, logtheta_min=logtheta_min, logtheta_max=logtheta_max, logM_max=logM_max)
+        interpolator_stage_end("profile_grid", grid_t0; verbose=verbose)
+
+        if length(cache_file) > 0
+            verbose && (print("Saving new interpolator to $(cache_file).
+"); flush(stdout))
+            save_t0 = interpolator_stage_start("cache save"; verbose=verbose)
+            save(cache_file, Dict(
+                "prof_logthetas" => prof_logthetas,
+                "prof_redshift" => prof_redshift,
+                "prof_logMs" => prof_logMs,
+                "prof_y" => prof_y,
+            ))
+            interpolator_stage_end("cache save", save_t0; verbose=verbose)
+        end
+    else
+        print("Found cached Battaglia profile model. Loading from disk.
+")
+        flush(stdout)
+        load_t0 = interpolator_stage_start("cache load"; verbose=verbose)
+        model_grid = load(cache_file)
+        interpolator_stage_end("cache load", load_t0; verbose=verbose)
+
+        unpack_t0 = interpolator_stage_start("cache unpack"; verbose=verbose)
+        logtheta_key = haskey(model_grid, "prof_logthetas") ? "prof_logthetas" :
+            (haskey(model_grid, "prof_logθs") ? "prof_logθs" :
+             error("Cache is missing log-theta key. Found keys: $(collect(keys(model_grid)))"))
+        prof_logthetas, prof_redshift, prof_logMs, prof_y = model_grid[logtheta_key],
+            model_grid["prof_redshift"], model_grid["prof_logMs"], model_grid["prof_y"]
+        interpolator_stage_end(
+            "cache unpack",
+            unpack_t0;
+            verbose=verbose,
+            extra="size=$(size(prof_y))"
+        )
+    end
+
+    nonfinite_t0 = interpolator_stage_start("nonfinite scan"; verbose=verbose)
+    nonfinite_count = count(x -> !isfinite(x), prof_y)
+    interpolator_stage_end(
+        "nonfinite scan",
+        nonfinite_t0;
+        verbose=verbose,
+        extra="count=$(nonfinite_count)"
+    )
+    nonfinite_count == 0 || error(
+        "build_interpolator encountered $(nonfinite_count) non-finite prof_y values (NaN/Inf)."
+    )
+
+    if cleanup_nonpositive
+        cleanup_t0 = interpolator_stage_start("nonpositive cleanup"; verbose=verbose)
+        replaced_count, floor_val = replace_nonpositive_with_floor!(prof_y)
+        interpolator_stage_end(
+            "nonpositive cleanup",
+            cleanup_t0;
+            verbose=verbose,
+            extra="replaced=$(replaced_count) floor=$(floor_val)"
+        )
+        if verbose && replaced_count > 0
+            println("Replaced ", replaced_count, " <=0 entries in prof_y with floor = ", floor_val)
+            flush(stdout)
+        end
+    else
+        nonpositive_t0 = interpolator_stage_start("nonpositive check"; verbose=verbose)
+        has_nonpositive = any(prof_y .<= 0)
+        interpolator_stage_end(
+            "nonpositive check",
+            nonpositive_t0;
+            verbose=verbose,
+            extra="has_nonpositive=$(has_nonpositive)"
+        )
+        has_nonpositive && error(
+            "build_interpolator encountered nonpositive prof_y values, but XGPAINT_CLEANUP_NONPOSITIVE=false. " *
+            "Re-enable cleanup or ensure the profile grid is strictly positive."
+        )
+    end
+
+    log_t0 = interpolator_stage_start("log transform"; verbose=verbose)
+    log_prof_y = log.(prof_y)
+    interpolator_stage_end("log transform", log_t0; verbose=verbose)
+
+    interpolate_t0 = interpolator_stage_start("Interpolations.interpolate"; verbose=verbose)
+    itp = Interpolations.interpolate(log_prof_y, BSpline(Cubic(Line(OnGrid()))))
+    interpolator_stage_end("Interpolations.interpolate", interpolate_t0; verbose=verbose)
+
+    scale_t0 = interpolator_stage_start("scale"; verbose=verbose)
+    interp_model = scale(itp, prof_logthetas, prof_redshift, prof_logMs)
+    interpolator_stage_end("scale", scale_t0; verbose=verbose)
+
+    wrap_t0 = interpolator_stage_start("LogInterpolatorProfile wrapper"; verbose=verbose)
+    wrapped_model = LogInterpolatorProfile(model, interp_model)
+    interpolator_stage_end("LogInterpolatorProfile wrapper", wrap_t0; verbose=verbose)
+    return wrapped_model
 end
 
 

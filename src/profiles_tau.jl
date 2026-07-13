@@ -29,7 +29,7 @@ function BattagliaTauProfile(; Omega_c::T=0.2589, Omega_b::T=0.0486, h::T=0.6774
         P0_amp::T=4.0e3, P0_alpha_m::T=0.29, P0_alpha_z::T=-0.66,
         x_c_amp::T=0.5, x_c_alpha_m::T=0.0, x_c_alpha_z::T=0.0,
         alpha_amp::T=0.88, alpha_alpha_m::T=-0.03, alpha_alpha_z::T=0.19,
-        beta_amp::T=-3.83, beta_alpha_m::T=0.04, beta_alpha_z::T=-0.025,
+        beta_amp::T=3.83, beta_alpha_m::T=0.04, beta_alpha_z::T=-0.025,
         gamma_amp::T=-0.2, gamma_alpha_m::T=0.0, gamma_alpha_z::T=0.0) where {T <: Real}
     OmegaM=Omega_b+Omega_c
     f_b = Omega_b / OmegaM
@@ -47,7 +47,7 @@ function BattagliaTauProfilePhysical(; Omega_c::T=0.2589, Omega_b::T=0.0486, h::
         P0_amp::T=4.0e3, P0_alpha_m::T=0.29, P0_alpha_z::T=-0.66,
         x_c_amp::T=0.5, x_c_alpha_m::T=0.0, x_c_alpha_z::T=0.0,
         alpha_amp::T=0.88, alpha_alpha_m::T=-0.03, alpha_alpha_z::T=0.19,
-        beta_amp::T=-3.83, beta_alpha_m::T=0.04, beta_alpha_z::T=-0.025,
+        beta_amp::T=3.83, beta_alpha_m::T=0.04, beta_alpha_z::T=-0.025,
         gamma_amp::T=-0.2, gamma_alpha_m::T=0.0, gamma_alpha_z::T=0.0) where {T <: Real}
     OmegaM=Omega_b+Omega_c
     f_b = Omega_b / OmegaM
@@ -71,16 +71,6 @@ function get_params(model::AbstractBattagliaTauProfile{T}, M_200c, z) where T
     return (xc=T(xc), α=T(α), β=T(β), γ=T(γ), P₀=T(P₀))
 end
 
-function ρ_crit_comoving_h⁻²(model, z)
-    return  (ρ_crit(model, z) ) / (1+z)^3 / model.cosmo.h^2
-end
-
-function r200c_comoving(model, M_200c, z)
-    rho_crit = ρ_crit(model, z) / (1+z)^3 
-    return cbrt(M_200c/ (4π/3 * rho_crit * 200)) 
-end
-
-
 # if angular, return the R200 size in radians
 function object_size(model::BattagliaTauProfile{T,C}, physical_size, z) where {T,C}
     d_A = angular_diameter_dist(model.cosmo, z)
@@ -94,16 +84,14 @@ function object_size(::BattagliaTauProfilePhysical{T,C}, physical_size, z) where
     return physical_size
 end
 
-
 # returns a density, which we can check against Msun/Mpc² 
 function rho_2d(model::AbstractBattagliaTauProfile, r, m200c, z)
     par = get_params(model, m200c, z)
-    r200c = R_Δ(model, m200c, z, 200)
+    r200c = R_Δ(model, m200c, z, 200)   # this is physical units
     X = r / object_size(model, r200c, z)  # either ang/ang or phys/phys
-    rho_crit = ρ_crit_comoving_h⁻²(model, z)  # need to sort this out, it's all in comoving...
-    result = par.P₀ * XGPaint._nfw_profile_los_quadrature(X, par.xc, par.α, par.β, par.γ)
-
-    return result * rho_crit * (r200c * (1+z))
+    rho_crit = ρ_crit(model, z)   # this is physical units
+    rho_fit = par.P₀ * XGPaint._nfw_profile_los_quadrature(X, par.xc, par.α, par.β, par.γ)   # dimensionless _nfw_profile_los_quadrature comes from profiles_y.jl TODO move
+    return rho_fit * model.f_b * rho_crit * r200c # mistake in battaglia 2016: need f_b to convert from m to gas. note r200c due to integral over X
 end
 
 function ne2d(model::AbstractBattagliaTauProfile, r, m200c, z)
@@ -113,9 +101,9 @@ function ne2d(model::AbstractBattagliaTauProfile, r, m200c, z)
     xH = 0.76
     nH_ne = 2xH / (xH + 1)
     nHe_ne = (1 - xH)/(2 * (1 + xH))
-    factor = (me + nH_ne*mH + nHe_ne*mHe) / model.cosmo.h^2
-    result = rho_2d(model, r, m200c, z)  # (Msun/h) / (Mpc/h)^2
-    return result / factor
+    factor = (me + nH_ne*mH + nHe_ne*mHe)
+    result = rho_2d(model, r, m200c, z)  # (Msun) / (Mpc)^2
+    return 0.9 * result / factor
 end
 
 # r is either a physical or angular radius. unitful does not do little h, so physical radius 
