@@ -1,7 +1,6 @@
 abstract type AbstractFRBProfile{T} <: AbstractBattagliaTauProfile{T} end
 
-# const M2_TO_PC_CM3 = ustrip(u"pc*cm^-3", 1u"m^-2")
-const M2_TO_PC_CM3 = 4.87e5
+const M2_TO_PC_CM3 = ustrip(u"pc*cm^-3", 1u"m^-2")
 
 
 struct HaloDMProfile{T,C} <: AbstractFRBProfile{T}
