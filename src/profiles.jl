@@ -78,11 +78,11 @@ end
 
 function profile_grid(model::AbstractGNFW{T}, logthetas, redshifts, logMs) where T
 
-    N_logtheta, N_z, N_logM=length(logθs), length(redshifts), length(logMs)
+    N_logtheta, N_z, N_logM = length(logthetas), length(redshifts), length(logMs)
     println(
         "[interpolator] profile_grid dims: N_logtheta=", N_logtheta,
         " N_z=", N_z,
-        " N_logM=length(logMs, N_logM,
+        " N_logM=", N_logM,
         " threads=", Threads.nthreads()
     )
     flush(stdout)
@@ -291,7 +291,6 @@ function build_max_paint_logradius(logθs, redshifts, logMs,
     
     logRs = zeros(T, (size(A)[2:3]))
     N_logM = length(logMs)
-    N_logθ=256)
     dF_r = zeros(N_logθ)
     
     for im in 1:N_logM
@@ -379,8 +378,8 @@ function build_interpolator(model::AbstractProfile; cache_file::String="",
             " cache_file=", isempty(cache_file) ? "<none>" : cache_file,
             " cleanup_nonpositive=", cleanup_nonpositive,
             " N_logtheta=", N_logtheta,
-            " pad=pad, pad,
-            " logM_max=logM_max, logM_max,
+            " pad=", pad,
+            " logM_max=", logM_max,
             " threads=", Threads.nthreads()
         )
         flush(stdout)
