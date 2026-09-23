@@ -291,6 +291,7 @@ function build_max_paint_logradius(logθs, redshifts, logMs,
     
     logRs = zeros(T, (size(A)[2:3]))
     N_logM = length(logMs)
+    N_logθ = length(logθs)
     dF_r = zeros(N_logθ)
     
     for im in 1:N_logM
