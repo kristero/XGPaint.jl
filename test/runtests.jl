@@ -106,6 +106,10 @@ end
     @test XGPaint.random_theta(Float32) <= π
     @test XGPaint.random_phi(Float64) <= 2π
     @test XGPaint.random_theta(Float64) <= π
+    tau_model = XGPaint.BattagliaTauProfilePhysical()
+    m200c = 1.0e14 * XGPaint.M_sun
+    z = 0.5
+    @test XGPaint.r200c_comoving(tau_model, m200c, z) ≈ XGPaint.R_Δ(tau_model, m200c, z, 200) * (1 + z)
 
     # file reading test
     testData = rand( Float32, 4, 100 )
@@ -181,4 +185,19 @@ end
     tc = XGPaint.compute_tau(p, 3u"Mpc" / (1+zz) / p.cosmo.h, Mnew, zz) + 0
     @test abs(1 - tc / 4.475127577749756e-05) < 1e-3
 
+end
+
+@testset "frb_profile" begin
+    dm_model = XGPaint.BattagliaFRBProfile()
+    theta = 1e-4
+    mass = 1.0e14
+    z = 0.5
+    mass_with_units = mass * M_sun
+
+    expected_dm = ustrip(u"pc*cm^-3",
+                         uconvert(u"pc*cm^-3",
+                                  XGPaint.ne2d(dm_model, theta, mass_with_units, z) / (1 + z)))
+
+    @test dm_model(theta, mass, z) ≈ expected_dm
+    @test XGPaint.compute_DM(dm_model, theta, mass_with_units, z) ≈ expected_dm
 end
