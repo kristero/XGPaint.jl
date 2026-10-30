@@ -35,6 +35,7 @@ abstract type AbstractInterpolatorProfile{T} <: AbstractProfile{T} end
 include("./util.jl")
 include("./healpixworkspace.jl")
 include("./model.jl")
+include("./truncation.jl")  # line-of-sight truncation (spherical default, legacy cylinder)
 include("./profiles.jl")
 include("./profiles_y.jl")
 include("./profiles_tau.jl")

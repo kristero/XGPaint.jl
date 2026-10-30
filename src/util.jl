@@ -59,12 +59,16 @@ end
 
 """
 Reads in a standard Battaglia 2016 model from disk for tSZ.
+
+The stored table is the legacy (WebSky) infinite line-of-sight Compton-y profile, so the
+returned interpolator wraps a `truncation=:cylinder` model. Build a spherical interpolator
+with `build_interpolator(Battaglia16ThermalSZProfile(...))` instead.
 """
 function load_precomputed_battaglia()
     prof_y, prof_logθs, prof_redshift, prof_logMs = load_precomputed_battaglia_data()
-    interp_model = scale(Interpolations.interpolate(log.(prof_y), BSpline(Cubic(Line(OnGrid())))), 
+    interp_model = scale(Interpolations.interpolate(log.(prof_y), BSpline(Cubic(Line(OnGrid())))),
         prof_logθs, prof_redshift, prof_logMs);
-    p = Battaglia16ThermalSZProfile(Omega_c=0.2589, Omega_b=0.0486, h=0.6774)
+    p = Battaglia16ThermalSZProfile(Omega_c=0.2589, Omega_b=0.0486, h=0.6774, truncation=:cylinder)
     return LogInterpolatorProfile(p, interp_model)
 end
 
@@ -79,11 +83,16 @@ function load_precomputed_battaglia_tau_data()
 end
 
 
+"""
+Reads in a standard Battaglia 2016 tau model from disk. Like `load_precomputed_battaglia`, the
+stored table is the legacy infinite line-of-sight profile, wrapped in a `truncation=:cylinder`
+model.
+"""
 function load_precomputed_battaglia_tau()
     prof_y, prof_logθs, prof_redshift, prof_logMs = load_precomputed_battaglia_tau_data()
-    interp_model = scale(Interpolations.interpolate(log.(prof_y), BSpline(Cubic(Line(OnGrid())))), 
+    interp_model = scale(Interpolations.interpolate(log.(prof_y), BSpline(Cubic(Line(OnGrid())))),
         prof_logθs, prof_redshift, prof_logMs);
-    p = BattagliaTauProfile(Omega_c=0.2589, Omega_b=0.0486, h=0.6774)
+    p = BattagliaTauProfile(Omega_c=0.2589, Omega_b=0.0486, h=0.6774, truncation=:cylinder)
     return LogInterpolatorProfile(p, interp_model)
 end
 

@@ -67,6 +67,21 @@ function fill_profile_slice!(dest, model::AbstractGNFW{T}, logthetas, mass, reds
 end
 
 
+"""
+    profile_grid(model; N_z=256, N_logM=128, N_logtheta=256, z_min=1e-3, z_max=5.0,
+                 logM_min=12, logM_max=15.7, logtheta_min=-15.7, logtheta_max=2.5)
+    profile_grid(model, logthetas, redshifts, logMs)
+
+Tabulate the profile on a (log θ, z, log10 M) grid; returns `(logthetas, redshifts, logMs, A)`
+with `A[iθ, iz, iM]`. Negative values are clipped to 0.
+
+The tabulated quantity depends on the line-of-sight truncation (see `tabulates_chord_mean`):
+for spherically truncated tSZ, tau and DM profiles (the default) it is the chord mean
+`g(θ) = y(θ) / (2 L(θ))`, `L = sqrt(X^2 - (θ/θ200c)^2)` in R200c units, which is positive
+and smooth everywhere (smoothly continued for θ >= X θ200c); the column itself is
+`y = g * chord_factor(θ, X θ200c, X)`. For `truncation=:cylinder` and other models it is
+the projected profile `y(θ)` itself, as before.
+"""
 function profile_grid(model::AbstractGNFW{T}; N_z=256, N_logM=128, N_logtheta=256, z_min=1e-3,
         z_max=5.0, logM_min=12, logM_max=15.7, logtheta_min=-15.7, logtheta_max=2.5) where T
 
@@ -115,6 +130,10 @@ end
 
 """
 Computes a real-space beam interpolator and a maximum
+
+Note: a beam convolves the physical column y. For spherically truncated profiles the
+interpolator tables hold the chord mean g (see `profile_grid`); multiply by `chord_factor`
+first to obtain y.
 """
 function realspacegaussbeam(::Type{T}, θ_FWHM::Ti; rtol=1e-24, N_θ::Int=2000) where {T,Ti}
     Nlmax = ceil(Int, log2(8π / θ_FWHM))
@@ -146,9 +165,15 @@ end
 # end
 
 
-"""Apply a beam to a profile grid"""
 _thread_storage_count() = isdefined(Threads, :maxthreadid) ? Threads.maxthreadid() : Threads.nthreads()
 
+"""
+Apply a beam to a profile grid.
+
+`y_prof_grid` must hold physical columns y(θ). A `profile_grid` of a spherically truncated
+model holds the chord mean g = y / (2L) instead (see `tabulates_chord_mean`); multiply each
+slice by `chord_factor(θ, X θ200c, X)` before applying the beam.
+"""
 function transform_profile_grid!(y_prof_grid, rft, lbeam)
     N_z = size(y_prof_grid, 2)
     N_logM = size(y_prof_grid, 3)
@@ -274,8 +299,16 @@ end
 
 
 
-# get angular size in radians of radius to stop at
-function compute_θmax(model::AbstractProfile{T}, M_Δ, z; mult=4) where T
+"""
+    compute_θmax(model, M_Δ, z; mult=truncation_radius(model))
+
+Angular radius (radians) of the painted disc, `mult * θ200c` with `M_Δ` in Unitful mass.
+The default `mult` is the `X` of `truncation(model)`: 4 for the legacy cylinder and for
+models without a truncation (unchanged), and the sphere radius for spherical profiles, so
+the disc is exactly the projected sphere `θmax = X θ200c`. Spherical interpolators assume
+this θmax when they apply `chord_factor(θ, θmax, X)`.
+"""
+function compute_θmax(model::AbstractProfile{T}, M_Δ, z; mult=truncation_radius(model)) where T
     r = R_Δ(model, M_Δ, z)
     return T(mult * angular_size(model, r, z))
 end
@@ -285,8 +318,15 @@ compute_θmin(model::AbstractInterpolatorProfile) = exp(first(first(model.itp.ra
 compute_θmin(::AbstractProfile{T}) where T = eps(T) 
 
 
-# find maximum radius to integrate to
-function build_max_paint_logradius(logθs, redshifts, logMs, 
+"""
+Find the maximum radius to integrate to (the radius enclosing a `1 - rtol` fraction of the
+projected signal) for each (z, M) slice of a profile grid `A`.
+
+`A` must hold physical columns y(θ). For spherically truncated models (`profile_grid`
+tabulates the chord mean g, see `tabulates_chord_mean`) the signal ends exactly at
+`θmax = X θ200c` (`compute_θmax`); use that instead, or multiply the grid by `chord_factor`.
+"""
+function build_max_paint_logradius(logθs, redshifts, logMs,
                               A::AbstractArray{T}; rtol=1e-2) where T
     
     logRs = zeros(T, (size(A)[2:3]))
@@ -337,8 +377,19 @@ is then done by exponentiating the result of the interpolator.
 ```
 
 This is useful for interpolating over a large range of scales and masses, where the profile
-is expected to be smooth in log-log space. It wraps the original model and also the 
+is expected to be smooth in log-log space. It wraps the original model and also the
 interpolator object itself.
+
+The line-of-sight truncation is that of the wrapped model (`truncation(ip) ==
+truncation(ip.model)`). When the wrapped model tabulates the chord mean g (spherical tSZ,
+tau and DM profiles, see `tabulates_chord_mean`), `f` above is g, and
+
+```
+    y(θ, M, z) = f(θ, z, M) * chord_factor(θ, θmax, X),   θmax = X θ200c(M, z)
+```
+
+`ip(θ, M, z)` returns this physical y (it computes θ200c on every call); the painters use
+the faster `paint_value` with the per-halo θmax. For all other models `ip(θ, M, z) = f`.
 """
 struct LogInterpolatorProfile{T, P <: AbstractProfile{T}, I1, C} <: AbstractInterpolatorProfile{T}
     model::P
@@ -351,11 +402,41 @@ function LogInterpolatorProfile(model::AbstractProfile, itp)
     return LogInterpolatorProfile(model, itp, model.cosmo)  # use wrapped cosmology
 end
 
+truncation(ip::LogInterpolatorProfile) = truncation(ip.model)
+
 # forward the interpolator calls to the wrapped interpolator
 # IMPORTANT: for backwards compat, interpolator internal order is θ, z, mass
 # which DIFFERS from the rest of the code which is (θ, mass, z, α, δ)
 # should fix this at some point
-@inline (ip::LogInterpolatorProfile)(θ, Mh_Msun, z) = exp(ip.itp(log(θ), z, log10(Mh_Msun)))
+"""
+    cached_value(ip::LogInterpolatorProfile, θ, Mh_Msun, z)
+
+The interpolated table value `exp(itp(log θ, z, log10 M))`: the projected profile y, or the
+chord mean g for spherically truncated models (see `LogInterpolatorProfile`).
+"""
+@inline cached_value(ip::LogInterpolatorProfile, θ, Mh_Msun, z) = exp(ip.itp(log(θ), z, log10(Mh_Msun)))
+
+@inline function (ip::LogInterpolatorProfile)(θ, Mh_Msun, z)
+    value = cached_value(ip, θ, Mh_Msun, z)
+    tabulates_chord_mean(ip.model) || return value
+    θmax = compute_θmax(ip, Mh_Msun * M_sun, z; mult=truncation_radius(ip))
+    return value * chord_factor(θ, θmax, truncation_radius(ip))
+end
+
+"""
+    paint_value(model, θ, θraw, θmax, Mh, z)
+
+Value added to a pixel at angular distance `θraw` from a halo (`θ = max(θmin, θraw)`), for
+a disc of radius `θmax`. Direct models: `model(θ, Mh, z)`. Log interpolators of spherical
+models: `cached_value(ip, θ, Mh, z) * chord_factor(θraw, θmax, X)` (the production HalfDome
+arithmetic), which assumes `θmax = X θ200c` as returned by `compute_θmax`.
+"""
+@inline paint_value(model, θ, θraw, θmax, Mh, z) = model(θ, Mh, z)
+@inline function paint_value(ip::LogInterpolatorProfile, θ, θraw, θmax, Mh, z)
+    value = cached_value(ip, θ, Mh, z)
+    tabulates_chord_mean(ip.model) || return value
+    return value * chord_factor(θraw, θmax, truncation_radius(ip))
+end
 
 Base.show(io::IO, ip::LogInterpolatorProfile{T,P,I1}) where {T,P,I1} = print(
     io, "LogInterpolatorProfile{$(T),\n  $(P),\n  ...} interpolating over size ", size(ip.itp))
@@ -368,11 +449,63 @@ function cleanup_nonpositive_enabled()
     error("Invalid XGPAINT_CLEANUP_NONPOSITIVE=$(repr(raw)).")
 end
 
-"""Helper function to build a (theta, z, Mh) interpolator"""
+"""Truncation metadata written to, and checked against, `build_interpolator` cache files."""
+function _truncation_metadata(model)
+    t = truncation(model)
+    kind = t isa SphereTruncation ? "spherical" :
+           t isa CylinderTruncation ? "cylinder" : string(nameof(typeof(t)))
+    return (
+        truncation=kind,
+        truncation_radius=Float64(t.X),
+        truncation_zmax=t isa CylinderTruncation ? t.zmax : 0.0,
+        tabulated_quantity=tabulates_chord_mean(model) ? "chord_mean" : "projected_profile",
+    )
+end
+
+# caches written before the truncation keyword existed carry no metadata: they hold the
+# legacy cylinder (infinite LOS) projected profile
+function _check_cache_truncation(model_grid, model, cache_file)
+    legacy = !haskey(model_grid, "truncation")
+    kind = get(model_grid, "truncation", "cylinder")
+    X = Float64(get(model_grid, "truncation_radius", DEFAULT_TRUNCATION_RADIUS))
+    zmax = Float64(get(model_grid, "truncation_zmax", LEGACY_LOS_ZMAX))
+    quantity = get(model_grid, "tabulated_quantity", "projected_profile")
+    want = _truncation_metadata(model)
+    ok = kind == want.truncation && quantity == want.tabulated_quantity &&
+         (kind != "spherical" || X == want.truncation_radius) &&
+         (kind != "cylinder" || zmax == want.truncation_zmax)
+    ok && return nothing
+    error("Interpolator cache $(repr(cache_file)) was tabulated with truncation=$(kind) " *
+          "(X=$(X), tabulated_quantity=$(quantity)" *
+          (legacy ? "; legacy cache without truncation metadata" : "") * "), but the model has " *
+          "truncation=$(want.truncation) (X=$(want.truncation_radius), " *
+          "tabulated_quantity=$(want.tabulated_quantity)). Rebuild the cache with overwrite=true, " *
+          "or construct the model with the matching keywords (truncation=:cylinder for caches " *
+          "written before spherical truncation became the default).")
+end
+
+"""
+    build_interpolator(model; cache_file="", N_logtheta=512, pad=128, N_z=256, N_logM=128,
+        z_min=1e-3, z_max=5.0, logM_min=12, logM_max=15.7, overwrite=true, verbose=true)
+
+Helper function to build a (theta, z, Mh) `LogInterpolatorProfile`: tabulates
+`profile_grid(model)` on log θ nodes spanning the `RadialFourierTransform(n=N_logtheta,
+pad=pad)` radii, linear z and log10 M, replaces non-positive cells by a floor (see
+`XGPAINT_CLEANUP_NONPOSITIVE`) and fits a cubic B-spline to the log.
+
+For spherically truncated models (the default) the table holds the chord mean g = y/(2L),
+which is positive and smooth across the sphere edge; the painters and `ip(θ, M, z)` multiply
+it by the exact chord (see `LogInterpolatorProfile`). The truncation is saved with the cache
+(`truncation`, `truncation_radius`, `truncation_zmax`, `tabulated_quantity`) and checked on
+load: a cache that does not match `truncation(model)` raises an error. Caches without these
+keys are treated as legacy cylinder (infinite LOS) tables.
+"""
 function build_interpolator(model::AbstractProfile; cache_file::String="",
-                            N_logtheta=512, pad=128, logM_max=15.7, overwrite=true, verbose=true)
+                            N_logtheta=512, pad=128, logM_max=15.7, overwrite=true, verbose=true,
+                            N_z=256, N_logM=128, z_min=1e-3, z_max=5.0, logM_min=12)
 
     cleanup_nonpositive = cleanup_nonpositive_enabled()
+    tmeta = _truncation_metadata(model)
     if verbose
         println(
             "[interpolator] config overwrite=", overwrite,
@@ -380,7 +513,13 @@ function build_interpolator(model::AbstractProfile; cache_file::String="",
             " cleanup_nonpositive=", cleanup_nonpositive,
             " N_logtheta=", N_logtheta,
             " pad=", pad,
-            " logM_max=", logM_max,
+            " N_z=", N_z,
+            " N_logM=", N_logM,
+            " z=[", z_min, ", ", z_max, "]",
+            " logM=[", logM_min, ", ", logM_max, "]",
+            " truncation=", tmeta.truncation,
+            " X=", tmeta.truncation_radius,
+            " tabulated=", tmeta.tabulated_quantity,
             " threads=", Threads.nthreads()
         )
         flush(stdout)
@@ -404,7 +543,8 @@ function build_interpolator(model::AbstractProfile; cache_file::String="",
 
         grid_t0 = interpolator_stage_start("profile_grid"; verbose=verbose)
         prof_logthetas, prof_redshift, prof_logMs, prof_y = profile_grid(model;
-            N_logtheta=N_logtheta, logtheta_min=logtheta_min, logtheta_max=logtheta_max, logM_max=logM_max)
+            N_logtheta=N_logtheta, logtheta_min=logtheta_min, logtheta_max=logtheta_max,
+            N_z=N_z, N_logM=N_logM, z_min=z_min, z_max=z_max, logM_min=logM_min, logM_max=logM_max)
         interpolator_stage_end("profile_grid", grid_t0; verbose=verbose)
 
         if length(cache_file) > 0
@@ -416,6 +556,10 @@ function build_interpolator(model::AbstractProfile; cache_file::String="",
                 "prof_redshift" => prof_redshift,
                 "prof_logMs" => prof_logMs,
                 "prof_y" => prof_y,
+                "truncation" => tmeta.truncation,
+                "truncation_radius" => tmeta.truncation_radius,
+                "truncation_zmax" => tmeta.truncation_zmax,
+                "tabulated_quantity" => tmeta.tabulated_quantity,
             ))
             interpolator_stage_end("cache save", save_t0; verbose=verbose)
         end
@@ -427,6 +571,7 @@ function build_interpolator(model::AbstractProfile; cache_file::String="",
         model_grid = load(cache_file)
         interpolator_stage_end("cache load", load_t0; verbose=verbose)
 
+        _check_cache_truncation(model_grid, model, cache_file)
         unpack_t0 = interpolator_stage_start("cache unpack"; verbose=verbose)
         logtheta_key = haskey(model_grid, "prof_logthetas") ? "prof_logthetas" :
             (haskey(model_grid, "prof_logθs") ? "prof_logθs" :
@@ -500,8 +645,18 @@ function build_interpolator(model::AbstractProfile; cache_file::String="",
 end
 
 
+"""
+    profile_paint_generic!(m, workspace, model, Mh, z, α₀, δ₀, θmax, normalization=1)
+
+Add `normalization * paint_value(model, θ, θraw, θmax, Mh, z)` to every pixel with
+`θ < θmax` (CAR, Gnomonic and HEALPix ring workspaces). For direct models this is
+`model(θ, Mh, z)`, which already follows `truncation(model)`; for log interpolators of
+spherically truncated models the interpolated chord mean is multiplied by the exact chord
+`chord_factor(θraw, θmax, X)`, so `θmax` must be `compute_θmax(model, Mh * M_sun, z)`
+(= X θ200c), as in `paint!`.
+"""
 function profile_paint_generic!(m::Enmap{T, 2, Matrix{T}, CarClenshawCurtis{T}},
-                        workspace::CarClenshawCurtisProfileWorkspace, model, Mh, z, α₀, δ₀, 
+                        workspace::CarClenshawCurtisProfileWorkspace, model, Mh, z, α₀, δ₀,
                         θmax, normalization=1) where T
 
     # get indices of the region to work on
@@ -514,7 +669,7 @@ function profile_paint_generic!(m::Enmap{T, 2, Matrix{T}, CarClenshawCurtis{T}},
     θmin = compute_θmin(model)
 
     x₀ = cos(δ₀) * cos(α₀)
-    y₀ = cos(δ₀) * sin(α₀) 
+    y₀ = cos(δ₀) * sin(α₀)
     z₀ = sin(δ₀)
 
     @inbounds for j in j_start:j_stop
@@ -523,10 +678,10 @@ function profile_paint_generic!(m::Enmap{T, 2, Matrix{T}, CarClenshawCurtis{T}},
             y₁ = workspace.cos_δ[i,j] * workspace.sin_α[i,j]
             z₁ = workspace.sin_δ[i,j]
             d² = (x₁ - x₀)^2 + (y₁ - y₀)^2 + (z₁ - z₀)^2
-            θ =  acos(clamp(1 - d² / 2, -one(T), one(T)))
-            θ = max(θmin, θ)  # clamp to minimum θ
-            m[i,j] += ifelse(θ < θmax, 
-                             T(normalization * model(θ, Mh, z)),
+            θraw = acos(clamp(1 - d² / 2, -one(T), one(T)))
+            θ = max(θmin, θraw)  # clamp to minimum θ
+            m[i,j] += ifelse(θ < θmax,
+                             T(normalization * paint_value(model, θ, θraw, θmax, Mh, z)),
                              zero(T))
         end
     end
@@ -563,10 +718,10 @@ function profile_paint_generic!(m::Enmap{T, 2, Matrix{T}, Gnomonic{T}},
             y₁ = workspace.cos_δ[i,j] * workspace.sin_α[i,j]
             z₁ = workspace.sin_δ[i,j]
             d² = (x₁ - x₀)^2 + (y₁ - y₀)^2 + (z₁ - z₀)^2
-            θ =  acos(clamp(1 - d² / 2, -one(T), one(T)))
-            θ = max(θmin, θ)  # clamp to minimum θ
-            m[i,j] += ifelse(θ < θmax, 
-                             normalization * model(θ, Mh, z),
+            θraw = acos(clamp(1 - d² / 2, -one(T), one(T)))
+            θ = max(θmin, θraw)  # clamp to minimum θ
+            m[i,j] += ifelse(θ < θmax,
+                             normalization * paint_value(model, θ, θraw, θmax, Mh, z),
                              zero(T))
         end
     end
@@ -626,12 +781,12 @@ function profile_paint_generic!(m::HealpixMap{T, RingOrder}, workspace::HealpixR
                 
                 # Compute angular distance
                 d² = (x₁ - x₀)^2 + (y₁ - y₀)^2 + (z₁ - z₀)^2
-                θ = acos(clamp(1 - d² / 2, -one(T), one(T)))
-                θ = max(θmin, θ)  # clamp to minimum θ
-                
+                θraw = acos(clamp(1 - d² / 2, -one(T), one(T)))
+                θ = max(θmin, θraw)  # clamp to minimum θ
+
                 # Add contribution to map
                 m.pixels[global_pix] += ifelse(θ < θmax,
-                                              normalization * model(θ, Mh, z),
+                                              normalization * paint_value(model, θ, θraw, θmax, Mh, z),
                                               zero(T))
             end
         end
@@ -661,8 +816,17 @@ end
 _fillzero!(m) = fill!(m, zero(eltype(m)))
 _fillzero!(m::HealpixMap) = fill!(m.pixels, zero(eltype(m)))
 
-# paint! is threaded by default
-function paint!(m, workspace, model, masses, redshifts, αs, δs; 
+"""
+    paint!(m, workspace, model, masses, redshifts, αs, δs; zerobeforepainting=true)
+    paint!(m, workspace, model, masses, redshifts, αs, δs, proj_v_over_c; zerobeforepainting=true)
+
+Paint halos (masses in Msun, M200c) onto `m` (threaded). Each halo is painted out to
+`θmax = compute_θmax(model, M, z)`, i.e. `X θ200c` with `X = truncation_radius(model)`. With the
+default spherical truncation only gas inside the `X R200c` sphere is projected; profiles
+built with `truncation=:cylinder` reproduce the previous (infinite line of sight, projected
+disc cut) maps.
+"""
+function paint!(m, workspace, model, masses, redshifts, αs, δs;
                 zerobeforepainting=true)
     
     zerobeforepainting && _fillzero!(m)

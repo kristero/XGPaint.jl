@@ -120,9 +120,11 @@ XGPaint.compute_θmin(::TestModel{T}) where T = eps(T)
         map_HealpixRingProfileWorkspace = HealpixMap{Float64, RingOrder}(zeros(Float64, nside2npix(nside)))
         map_bruteforce = HealpixMap{Float64, RingOrder}(zeros(Float64, nside2npix(nside)))
         
-        # Real y profile model
-        y_model = XGPaint.Battaglia16ThermalSZProfile()
-        
+        # Real y profile model. These discs (θmax = 0.03-0.08 rad) are much larger than the
+        # 4 θ200c sphere of the default spherical truncation, so use the legacy infinite LOS
+        # here; the spherical painter is tested in test_truncation.jl.
+        y_model = XGPaint.Battaglia16ThermalSZProfile(truncation=:cylinder)
+
         # Test parameters - realistic values
         test_cases = [
             (α₀=0.0, δ₀=0.0, θmax=0.05, Mh=1e14, z=0.3),         # North pole, typical cluster

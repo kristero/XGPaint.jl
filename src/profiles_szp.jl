@@ -28,6 +28,10 @@ end
 compute_θmin(model::SZPackRSZProfile) = min(
     exp(first(first(model.y_model_interp.itp.ranges))))
 
+# the line-of-sight truncation (and so the painting radius θmax = X θ200c) is that of the
+# Compton-y interpolator; its painters apply the chord factor for spherical profiles
+truncation(model::SZPackRSZProfile) = truncation(model.y_model_interp)
+
 
 function SZPackRSZProfile(y_model_interp, x::T; szpack_fiducial_tau=0.01, Omega_c=0.2589, 
         Omega_b=0.0486, h=0.6774, table_filename=rsz_szpack_table_filename()) where T

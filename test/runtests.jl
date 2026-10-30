@@ -11,6 +11,8 @@ using PhysicalConstants.CODATA2018
 # Include HEALPix ring workspace tests
 include("test_healpix_rings.jl")
 include("test_ringworkspace.jl")
+# spherical (default) vs legacy cylinder line-of-sight truncation
+include("test_truncation.jl")
 
 # relative background evolutions differ by 1e-3 between Julia and Python 2
 rtol = 1e-3
@@ -129,6 +131,7 @@ end
 
 
 @testset "tsz" begin
+    # the stored map and the precomputed table are legacy infinite-LOS (truncation=:cylinder)
     ra, dec, redshift, halo_mass = XGPaint.load_example_halos()
     ra, dec, redshift, halo_mass = sort_halo_catalog(ra, dec, redshift, halo_mass);
     y_model_interp = XGPaint.load_precomputed_battaglia()
@@ -144,8 +147,10 @@ end
 end
 
 @testset "tau_profile" begin
-    # test the 3D tau profile
-    p = XGPaint.BattagliaTauProfilePhysical(Omega_c=0.267, Omega_b=0.0493,  h=0.6712)
+    # test the 3D tau profile; the projected reference values below are for the legacy
+    # infinite line of sight, hence truncation=:cylinder
+    p = XGPaint.BattagliaTauProfilePhysical(Omega_c=0.267, Omega_b=0.0493,  h=0.6712,
+        truncation=:cylinder)
 
     # fits are in Msun/h, will change later
     par = get_params(p, (1e14M_sun / 0.6712), 0.5)

@@ -1,22 +1,36 @@
 
-struct RSZPerturbativeProfile{T,C} <: AbstractGNFW{T}
+"""
+    RSZPerturbativeProfile(; Omega_c=0.2589, Omega_b=0.0486, h=0.6774, x=2.6408,
+        truncation=:spherical, truncation_radius=4.0)
+
+Perturbative relativistic tSZ intensity (MJy/sr) at dimensionless frequency `x`, built on a
+default `Battaglia16ThermalSZProfile` Compton-y profile (field `y_model`) with the same
+cosmology and line-of-sight truncation keywords.
+"""
+struct RSZPerturbativeProfile{T,C,Y} <: AbstractGNFW{T}
     f_b::T  # Omega_b / Omega_c = 0.0486 / 0.2589
     cosmo::C
     X::T  # X = 2.6408 corresponding to frequency 150 GHz
+    y_model::Y  # Compton-y profile (Battaglia16ThermalSZProfile) carrying the truncation
 end
 
-function RSZPerturbativeProfile(; Omega_c::T=0.2589, Omega_b::T=0.0486, h::T=0.6774, x::T=2.6408) where {T <: Real}
+function RSZPerturbativeProfile(; Omega_c::T=0.2589, Omega_b::T=0.0486, h::T=0.6774, x::T=2.6408,
+        truncation=:spherical, truncation_radius=DEFAULT_TRUNCATION_RADIUS) where {T <: Real}
     OmegaM=Omega_b+Omega_c
     f_b = Omega_b / OmegaM
     cosmo = get_cosmology(T, h=h, OmegaM=OmegaM)
     X = x
-    return RSZPerturbativeProfile(f_b, cosmo, X)
+    y_model = Battaglia16ThermalSZProfile(Omega_c=Omega_c, Omega_b=Omega_b, h=h,
+        truncation=truncation, truncation_radius=truncation_radius)
+    return RSZPerturbativeProfile(f_b, cosmo, X, y_model)
 end
 
+truncation(model::RSZPerturbativeProfile) = truncation(model.y_model)
+
 # wrap the compton y in a type so it uses the Battaglia+16 profile
+# (the Battaglia16ThermalSZProfile(f_b, cosmo) constructor used here before no longer exists)
 function compton_y(model::RSZPerturbativeProfile, r, M_200c, z)
-    return P_e_los(
-        Battaglia16ThermalSZProfile(model.f_b, model.cosmo), r, M_200c, z) * P_e_factor
+    return compton_y(model.y_model, r, M_200c, z)
 end
 
 """
@@ -110,10 +124,11 @@ function rSZ_perturbative(model, r, M_200, z; T_scale="virial", sim_type="combin
     end
 end
 
-function (model::RSZPerturbativeProfile)(r, M, z; 
+# mass is in Msun (no units), like every other profile callable; rSZ_perturbative needs units
+function (model::RSZPerturbativeProfile)(r, M, z;
         T_scale="virial", sim_type="combination", showT=false)
     return ustrip(uconvert(u"MJy/sr", rSZ_perturbative(
-        model, r, M, z, T_scale=T_scale, sim_type=sim_type, showT=showT)))
+        model, r, M * M_sun, z, T_scale=T_scale, sim_type=sim_type, showT=showT)))
 end
 
 function calc_null(model, M_200, z)
@@ -128,7 +143,7 @@ function profile_paint!(m::Enmap{T, 2, Matrix{T}, CarClenshawCurtis{T}},
                         workspace::CarClenshawCurtisProfileWorkspace, 
                         model::RSZPerturbativeProfile, Mh, z, α₀, δ₀, θmax) where T
     X_0 = calc_null(model, Mh, z)
-    profile_paint_generic!(m, model, workspace, Mh, z, α₀, δ₀, θmax, sign(model.X - X_0))
+    profile_paint_generic!(m, workspace, model, Mh, z, α₀, δ₀, θmax, sign(model.X - X_0))
 end
 
 # like the usual paint, but use the sign of the null as the sign of the perturbation

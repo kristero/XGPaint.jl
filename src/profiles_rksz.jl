@@ -17,9 +17,16 @@ function RKSZpackProfile(y_model_interp, tau_interp, szpack_interp_ksz, szpack_i
     OmegaM=Omega_b+Omega_c
     f_b = Omega_b / OmegaM
     cosmo = get_cosmology(T, h=h, Neff=3.046, OmegaM=OmegaM)
-    return RKSZpackProfile(f_b, cosmo, x, y_model_interp, tau_interp, 
+    # both terms are painted out to the same θmax = X θ200c, so the truncations must agree
+    truncation(y_model_interp) == truncation(tau_interp) || throw(ArgumentError(
+        "y and tau interpolators must share the line-of-sight truncation, got " *
+        "$(truncation(y_model_interp)) and $(truncation(tau_interp))"))
+    return RKSZpackProfile(f_b, cosmo, x, y_model_interp, tau_interp,
         szpack_interp_ksz, szpack_interp_T0, szpack_fiducial_tau)
 end
+
+# truncation and painting radius θmax = X θ200c follow the Compton-y interpolator
+truncation(model::RKSZpackProfile) = truncation(model.y_model_interp)
 
 
 """
