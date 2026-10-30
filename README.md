@@ -9,3 +9,26 @@
 
 `XGPaint.jl` paints maps of extragalactic foregrounds using halo catalogs. Please read the [documentation](https://WebSky-CITA.github.io/XGPaint.jl/dev).
 
+## Line-of-sight truncation (this fork, branch `cluster`)
+
+All gNFW gas profiles (tSZ `Battaglia16ThermalSZProfile` and `BreakModel`, tau/kSZ
+`BattagliaTauProfile`, DM/FRB `HaloDMProfile`, and the rSZ/rkSZ wrappers that use them) are
+**spherically truncated by default**: only gas inside `r <= X R200c` (`X = 4`) is projected.
+At projected radius `x = θ/θ200c` the line of sight is the chord `|l| <= sqrt(X^2 - x^2)`, the
+profile is exactly zero for `θ >= X θ200c`, and `paint!` paints each halo out to
+`θmax = X θ200c`. Interpolators (`build_interpolator`, `profile_grid`) of these profiles
+tabulate the chord mean `y / (2L)`, which is positive and smooth across the edge, and the
+painters multiply it by the exact chord `2X sqrt(1 - (θ/θmax)^2)`.
+
+```julia
+y_model = Battaglia16ThermalSZProfile(Omega_c=0.2589, Omega_b=0.0486, h=0.6774)  # sphere, X = 4
+y_model_3 = Battaglia16ThermalSZProfile(truncation_radius=3.0)                     # sphere, X = 3
+y_model_old = Battaglia16ThermalSZProfile(truncation=:cylinder)                    # previous behaviour
+```
+
+`truncation=:cylinder` reproduces the previous outputs exactly (line of sight integrated to
+`1e5 R200c`, projected disc cut at `4 θ200c`), e.g. to regenerate old maps. The precomputed
+WebSky tables (`load_precomputed_battaglia`, `load_precomputed_battaglia_tau`) are legacy
+`:cylinder` tables, and `build_interpolator` cache files record their truncation and refuse to
+load into a model with a different one. See `CHANGELOG.md`.
+

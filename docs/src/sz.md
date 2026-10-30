@@ -52,6 +52,23 @@ print(y_model_interp)
 [^1]: 
      For maps with many pixels and halos, building the interpolator is only about 10% of the map generation cost. If you have a use case where you instead need to vary cosmology on very small patches, contact the developers!
 
+!!! note "Line-of-sight truncation"
+
+    By default every gNFW profile (`Battaglia16ThermalSZProfile`, `BreakModel`,
+    `BattagliaTauProfile`, `HaloDMProfile`, and the rSZ/rkSZ wrappers built on them) counts
+    only the gas inside the sphere ``r \le X R_{200c}`` with ``X = 4``: at projected radius
+    ``x = \theta/\theta_{200c}`` the line of sight is the chord ``|l| \le \sqrt{X^2 - x^2}``,
+    the profile is zero for ``\theta \ge X\theta_{200c}``, and halos are painted out to
+    ``\theta_{\max} = X\theta_{200c}``. Interpolators of these profiles tabulate the chord mean
+    ``y / (2L)``, which stays smooth across the edge, and the painters multiply it by the exact
+    chord.
+
+    The previous behaviour (line of sight integrated to ``10^5 R_{200c}``, projected disc cut
+    at ``4\theta_{200c}``) is available with `truncation=:cylinder`, for example
+    `Battaglia16ThermalSZProfile(Omega_c=0.2589, Omega_b=0.0486, h=0.6774, truncation=:cylinder)`;
+    `truncation_radius` sets ``X``. The precomputed WebSky table returned by
+    `load_precomputed_battaglia()` is a legacy (`:cylinder`) table.
+
 
 Now, we'll set up the map to generate. We will construct a small CAR (Clenshaw-Curtis variant) patch on the sky. You have to construct a workspace **for each new sky patch**.
 

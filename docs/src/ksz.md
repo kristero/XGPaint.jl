@@ -48,6 +48,15 @@ Now let's set up an electron profile.
 model = BattagliaTauProfile(Omega_c=0.267, Omega_b=0.0493,  h=0.6712)
 ```
 
+!!! note "Line-of-sight truncation"
+
+    The electron column is spherically truncated by default: only gas inside
+    ``4 R_{200c}`` (`truncation_radius`) is projected, tau vanishes at
+    ``\theta \ge 4\theta_{200c}`` and halos are painted out to that radius. Pass
+    `truncation=:cylinder` for the previous infinite line of sight (projected cut at
+    ``4\theta_{200c}``). The precomputed table from `load_precomputed_battaglia_tau()`, used
+    below, is a legacy (`:cylinder`) table.
+
 We can now compute the integrated electron density, 
 
 ```@example ksz
